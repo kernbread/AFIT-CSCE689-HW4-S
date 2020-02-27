@@ -47,6 +47,7 @@ public:
    time_t timestamp;
    float latitude;
    float longitude;
+   bool primary_node_adjust = false; // set to true when record timestamp adjusted based on offset from the primary node 
    
 private:
    unsigned short _flags;

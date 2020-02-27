@@ -3,8 +3,10 @@
 
 #include <map>
 #include <memory>
+#include <vector>
 #include "QueueMgr.h"
 #include "DronePlotDB.h"
+#include <thread>
 
 /***************************************************************************************
  * ReplServer - class that manages replication between servers. The data is automatically
@@ -38,8 +40,27 @@ private:
    void addReplDronePlots(std::vector<uint8_t> &data);
    void addSingleDronePlot(std::vector<uint8_t> &data);
 
+   void startDaemonThreads();
+
+   // daemon thread that periodically attempts to find the offset between the primary node and the other nodes
+   // joins when all offsets between every other node and the primary are found
+   void getOffsetsFromPrimaryNode();
+   bool readyToAdjust = false; // set to true once we have all the offsets
+
+   // daemon thread that periodically attempts to remove duplicate records from the local database.
+   // a duplicate record has the same time, lat, long
+   void deduplicate();
+
+   // daemon thread that periodically attempts to adjust local timestamps to conform with the primary_node_id's timestamps
+   void adjustTimeStamps(); 
+
    unsigned int queueNewPlots();
 
+   // holds offsets from primary node -> other nodes; key=nodeId, value=offsetFromPrimary
+   std::map<int, long int> offsets;
+
+   // holds handles to all daemon threads created
+   std::vector<std::thread> threadHandles;
 
    QueueMgr _queue;    
 
@@ -63,6 +84,9 @@ private:
    // Used to bind the server
    std::string _ip_addr;
    unsigned short _port;
+
+   // primary node to get time from
+   int primary_node_id = 1;
 };
 
 
