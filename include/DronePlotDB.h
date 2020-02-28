@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include "exceptions.h"
-
+#include <mutex>
 
 // Flags for the DronePlot object. The first two are already coded in and
 // you can define more. It's based off bitwise and/or operations so just
@@ -47,8 +47,7 @@ public:
    time_t timestamp;
    float latitude;
    float longitude;
-   bool primary_node_adjust = false; // set to true when record timestamp adjusted based on offset from the primary node 
-   
+
 private:
    unsigned short _flags;
 
@@ -100,6 +99,7 @@ public:
    // Wipe the database
    void clear();
 
+   std::mutex mtx;
 private:
    std::list<DronePlot> _dbdata;
 

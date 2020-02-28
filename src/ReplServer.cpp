@@ -62,6 +62,7 @@ void ReplServer::startDaemonThreads() {
 
 ReplServer::~ReplServer() {
 
+  terminated = true;
   // join all joinable daemon threads
   for (std::thread& thread : threadHandles) {
     if (thread.joinable())
@@ -120,7 +121,9 @@ void ReplServer::replicate() {
       // that have not been replicated yet and adding them to the queue for replication
       if (getAdjustedTime() - _last_repl > secs_between_repl) {
 
+         mtx.lock();
          queueNewPlots();
+         mtx.unlock();
          _last_repl = getAdjustedTime();
       }
       
@@ -132,7 +135,16 @@ void ReplServer::replicate() {
       while (_queue.pop(sid, data)) {
 
          // Incoming replication--add it to this server's local database
-         addReplDronePlots(data);         
+         mtx.lock();
+
+         if (data.size() != 20)
+            addReplDronePlots(data);  
+          else {
+            if (_verbosity >= 2) std::cout << "Received new offsets from node " << sid << std::endl;
+            processReceivedOffsets(data);
+          }
+
+         mtx.unlock();       
       }       
 
       usleep(1000);
@@ -147,7 +159,6 @@ void ReplServer::replicate() {
  *
  *    Throws: socket_error for recoverable errors, runtime_error for unrecoverable types
  **********************************************************************************************/
-
 unsigned int ReplServer::queueNewPlots() {
    std::vector<uint8_t> marshall_data;
    unsigned int count = 0;
@@ -242,8 +253,6 @@ void ReplServer::addReplDronePlots(std::vector<uint8_t> &data) {
 void ReplServer::addSingleDronePlot(std::vector<uint8_t> &data) {
    DronePlot tmp_plot;
 
-
-
    tmp_plot.deserialize(data);
 
    _plotdb.addPlot(tmp_plot.drone_id, tmp_plot.node_id, tmp_plot.timestamp, tmp_plot.latitude,
@@ -272,31 +281,39 @@ void ReplServer::getOffsetsFromPrimaryNode() {
 
         if (dpit2 == dpit) continue; // skip, we don't want to check an element against itself
 
+        mtx.lock();
         auto node_id_2 = dp2.node_id;
         auto latitude_2 = dp2.latitude;
         auto longitude_2 = dp2.longitude;
         auto time_2 = dp2.timestamp;
-        auto primary_node_adjusted_2 = dp2.primary_node_adjusted;
 
-        // if they have the same lat,long, we can derive the offset from their time difference 
-        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !primary_node_adjusted_2)
+        // if they have the same lat,long, we can derive the offset from their time difference
+        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && dp2.drone_id!=4) {
           offsets.insert({node_id_2, (long int) time_1 - (long int) time_2});
+        }
+
+
+        mtx.unlock();
       }
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
   }
 
-  if (_verbosity >= 2) {
+  if (_verbosity >= 1) {
     std::cout << "Found all offsets!" << std::endl;
     for (auto itr = offsets.begin(); itr != offsets.end(); ++itr)
       std::cout << itr->first << '\t' << itr->second << std::endl;
   }
 
-  readyToAdjust = true;
+  sendOffsets(); // send found offsets to all other nodes so they can stop their search :)
+  // from this, other nodes will update their offsets map to mirror the one discovered 
 
+  readyToAdjust = true;
 }
 
 void ReplServer::adjustTimeStamps() {
-  while (true) {
+  while (!terminated) {
     // wait until we have all the offsets before adjusting...
     if (!readyToAdjust) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -312,12 +329,13 @@ void ReplServer::adjustTimeStamps() {
           DronePlot dp = *dpit;
 
           auto node_id = dp.node_id;
-          auto primary_node_adjusted = dp.primary_node_adjusted;
 
-          if (node_id_to_adjust == node_id && !primary_node_adjusted) {
+          mtx.lock();
+          if (node_id_to_adjust == node_id && dpit->drone_id != 4) {
+            dpit->drone_id = 4;
             dpit->timestamp = dpit->timestamp + offset; // adjust timestamp
-            dpit->primary_node_adjusted = true;
           }
+          mtx.unlock();
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -325,7 +343,7 @@ void ReplServer::adjustTimeStamps() {
 }
 
 void ReplServer::deduplicate() {
-  while (true) {
+  while (!terminated) {
     std::list<DronePlot>::iterator dpit;
     for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
       DronePlot dp = *dpit;
@@ -335,14 +353,10 @@ void ReplServer::deduplicate() {
       auto time_1 = dp.timestamp;
 
       std::list<DronePlot>::iterator dpit2;
-      int index = 0;
       for (dpit2 = _plotdb.begin(); dpit2 != _plotdb.end(); dpit2++) {
         DronePlot dp2 = *dpit2;
 
-        if (dpit2 == dpit) {
-          continue; // skip, we don't want to check an element against itself
-          index++;
-        }
+        if (dpit2 == dpit) continue; // skip, we don't want to check an element against itself
 
         auto latitude_2 = dp2.latitude;
         auto longitude_2 = dp2.longitude;
@@ -351,8 +365,6 @@ void ReplServer::deduplicate() {
         //if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2)
           //dpit2 = _plotdb.erase(dpit2);
       }
-
-      index++;
     }
 
 
@@ -363,4 +375,84 @@ void ReplServer::deduplicate() {
 
 void ReplServer::shutdown() {
    _shutdown = true;
+}
+
+
+void ReplServer::sendOffsets() {
+  std::vector<uint8_t> marshall_data;
+  unsigned int count = 0;
+
+
+      for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
+        auto node_id_to_adjust = itr->first;
+        auto offset = itr->second;
+
+        serializeOffsetsMessage(marshall_data, node_id_to_adjust, offset);
+        count++;
+      }
+
+   uint8_t *ctptr_begin = (uint8_t *) &count;
+   marshall_data.insert(marshall_data.begin(), ctptr_begin, ctptr_begin+sizeof(unsigned int));
+
+  // Send to the queue manager
+   if (marshall_data.size() > 0) {
+      _queue.sendToAll(marshall_data);
+   }
+
+   if (_verbosity >= 1) 
+      std::cout << "Queued up " << count << " offsets to be distributed.\n";
+}
+
+void ReplServer::serializeOffsetsMessage(std::vector<uint8_t> &buf, int node_to_adjust, int offset) {
+     uint8_t *dataptrs[2] = { (uint8_t *) &node_to_adjust,
+                              (uint8_t *) &offset };
+
+   uint8_t sizes[2] = {sizeof(node_to_adjust), sizeof(offset)};
+
+   for (unsigned int i=0; i<2; i++) { 
+      for (unsigned int j=0; j < sizes[i]; j++, dataptrs[i]++)
+      {  
+         buf.push_back(*dataptrs[i]);
+      }
+   }
+}
+
+void ReplServer::processReceivedOffsets(std::vector<uint8_t> &buf) {
+   int node_to_adjust;
+   int offset; 
+
+   unsigned int *numptr = (unsigned int *) buf.data();
+   unsigned int count = *numptr;
+
+   // Store sub-vectors for efficiency
+   std::vector<uint8_t> plot;
+   auto dptr = buf.begin() + sizeof(unsigned int);
+
+   auto dataSize = sizeof(node_to_adjust) + sizeof(offset);
+
+   for (unsigned int i=0; i<count; i++) {
+      plot.clear();
+      plot.assign(dptr, dptr + dataSize);
+      processSingleOffset(plot, node_to_adjust, offset);
+      dptr += dataSize;      
+   }
+ }
+
+void ReplServer::processSingleOffset(std::vector<uint8_t> &buf, int node_to_adjust, int offset) {
+   uint8_t *dataptrs[2] = { (uint8_t *) &node_to_adjust,
+                              (uint8_t *) &offset };
+
+   uint8_t sizes[2] = {sizeof(node_to_adjust), sizeof(offset)};
+
+   // Loop through all our data variables and their sizes, and read in the data
+   unsigned int vpos = 0;
+   for (unsigned int i=0; i<2; i++) {
+      for (unsigned int j=0; j < sizes[i]; j++, dataptrs[i]++){
+         if (vpos > buf.size())
+            throw std::runtime_error("Offset deserialize ran out of data in vector buffer prematurely");
+         *dataptrs[i] = buf[vpos++];
+      }
+   }
+
+   offsets.insert({node_to_adjust, offset});
 }

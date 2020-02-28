@@ -7,6 +7,7 @@
 #include "QueueMgr.h"
 #include "DronePlotDB.h"
 #include <thread>
+#include <mutex>
 
 /***************************************************************************************
  * ReplServer - class that manages replication between servers. The data is automatically
@@ -87,6 +88,16 @@ private:
 
    // primary node to get time from
    int primary_node_id = 1;
+
+   bool terminated = false;
+
+   std::mutex mtx;
+
+   // functions used to send offsets to other nodes
+   void sendOffsets();
+   void serializeOffsetsMessage(std::vector<uint8_t> &buf, int node_to_adjust, int offset);
+   void processReceivedOffsets(std::vector<uint8_t> &buf);
+   void processSingleOffset(std::vector<uint8_t> &buf, int node_to_adjust, int offset);
 };
 
 
