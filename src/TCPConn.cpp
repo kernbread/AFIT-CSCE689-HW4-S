@@ -290,7 +290,7 @@ void TCPConn::transmitData() {
       setNodeID(node.c_str());
 
       // Send the replication data
-      sendData(_outputbuf);
+      sendEncryptedData(_outputbuf);
 
       if (_verbosity >= 3)
          std::cout << "Successfully authenticated connection with " << getNodeID() <<
@@ -315,7 +315,7 @@ void TCPConn::waitForData() {
    if (_connfd.hasData()) {
       std::vector<uint8_t> buf;
 
-      if (!getData(buf))
+      if (!getEncryptedData(buf))
          return;
 
       if (!getCmdData(buf, c_rep, c_endrep)) {
