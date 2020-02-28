@@ -13,6 +13,10 @@
 #include <crypto++/rijndael.h>
 #include <crypto++/gcm.h>
 #include <crypto++/aes.h>
+#include <stdlib.h>
+#include <time.h>  
+#include <string> 
+
 
 using namespace CryptoPP;
 
@@ -177,14 +181,24 @@ void TCPConn::handleConnection() {
             sendSID();
             break;
 
-         // Server: Wait for the SID from a newly-connected client, then send our SID
+         // Server: Wait for the SID from a newly-connected client, then send our SID and a challenge
          case s_connected:
             waitForSID();
             break;
-   
-         // Client: connecting user - replicate data
+
+         // Client: Wait for challenge from server, then encrpyt the chanllenge with shared key. Also send a challenge to server. 
+         case s_client_wait_for_challenge:
+            waitForChallengeFromServer();
+            break;
+
+         // Server: Wait for encrypted challenge & client challenge from client. Verify client encrpyted challenge. Respond to client challenge.
+         case s_server_wait_for_encryped_challenge_and_client_challenge:
+            waitForEncrypedChallengeFromClientAndClientChallenge();
+            break;
+
+         // Client: Wait for encryped challenge from server. Verify server encrypted challenge. If verified, connecting user - replicate data
          case s_datatx:
-            transmitData();
+            waitForEncryptedChallengeFromServerAndTransmitData();
             break;
 
          // Server: Receive data from the client
@@ -227,9 +241,17 @@ void TCPConn::sendSID() {
    _status = s_datatx; 
 }
 
+
+unsigned int generateRandomNumber(unsigned int start, unsigned int end) {
+   // seed
+   srand(time(NULL));
+
+   return rand() % end + start;
+}
+
 /**********************************************************************************************
  * waitForSID()  - receives the SID and sends our SID
- *
+ *    UPDATE: Wait for the SID from a newly-connected client, then send our SID and a challenge
  *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
  **********************************************************************************************/
 
@@ -253,6 +275,10 @@ void TCPConn::waitForSID() {
       std::string node(buf.begin(), buf.end());
       setNodeID(node.c_str());
 
+      // generate a challenge (in form of a random number)
+      auto challenge = generateRandomNumber(0, UINT_MAX);
+      auto challenge_str = std::to_string(challenge);
+
       // Send our Node ID
       buf.assign(_svr_id.begin(), _svr_id.end());
       wrapCmd(buf, c_sid, c_endsid);
@@ -262,14 +288,28 @@ void TCPConn::waitForSID() {
    }
 }
 
+// Client: Wait for challenge from server, then encrpyt the chanllenge with shared key. Also send a challenge to server. 
+void TCPConn::waitForChallengeFromServer() {
+   if (_connfd.hasData()) {
+      std::vector<uint8_t> buf;
+
+      if (!getData(buf))
+         return;
+
+   }
+
+}
+
+// Server: Wait for encrypted challenge & client challenge from client. Verify client encrpyted challenge. Respond to client challenge.
+void TCPConn::waitForEncrypedChallengeFromClientAndClientChallenge() {
+}
 
 /**********************************************************************************************
- * transmitData()  - receives the SID from the server and transmits data
- *
+ * waitForEncryptedChallengeFromServerAndTransmitData()  - receives the SID from the server and transmits data.
+ *    UPDATE: Wait for encryped challenge from server. Verify server encrypted challenge. If verified, connecting user - replicate data
  *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
  **********************************************************************************************/
-
-void TCPConn::transmitData() {
+void TCPConn::waitForEncryptedChallengeFromServerAndTransmitData() {
 
    // If data on the socket, should be our Auth string from our host server
    if (_connfd.hasData()) {
@@ -506,6 +546,28 @@ bool TCPConn::getCmdData(std::vector<uint8_t> &buf, std::vector<uint8_t> &startc
    return true;
 }
 
+// same as getCmdData, except gets data between startcmd1 and endcmd1 and places in retbuf1, and gets data between
+// startcmd2 and endcmd2 and places them in retbuf2
+bool TCPConn::getCmdData2(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd1,
+                                               std::vector<uint8_t> &endcmd1,
+                                               std::vector<uint8_t> &startcmd2,
+                                               std::vector<uint8_t> &endcmd2,
+                                               std::vector<uint8_t> &retbuf1,
+                                               std::vector<uint8_t> &retbuf2) {
+   std::vector<uint8_t> temp1 = buf;
+   std::vector<uint8_t> temp2 = buf;
+   auto start1 = findCmd(temp1, startcmd1);
+   auto end1 = findCmd(temp1, endcmd1);
+   auto start2 = findCmd(temp2, startcmd2);
+   auto end2 = findCmd(temp2, endcmd2);
+
+   // TODO : ADD CHECK TO VERIFY!
+
+   retbuf1.assign(start1 + startcmd1.size(), end1);
+   retbuf2.assign(start2 + startcmd2.size(), end2);
+   return true;
+}
+
 /**********************************************************************************************
  * wrapCmd - wraps the command brackets around the passed-in data
  *
@@ -522,6 +584,32 @@ void TCPConn::wrapCmd(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd,
    temp.insert(temp.end(), endcmd.begin(), endcmd.end());
 
    buf = temp;
+}
+
+// Same as wrapCmd, except places stardcmd1 and endcmd1 string around the data in buf1 and startcmd2 and endcmd2 around the data in buf2.
+// Finally, buf1 and buf2 are combined and placed in retbuf
+void TCPConn::wrapCmd2(std::vector<uint8_t> &buf1, std::vector<uint8_t> &buf2, 
+                                                  std::vector<uint8_t> &startcmd1,
+                                                  std::vector<uint8_t> &endcmd1,
+                                                  std::vector<uint8_t> &startcmd2,
+                                                  std::vector<uint8_t> &endcmd2,
+                                                  std::vector<uint8_t> &retbuf) {
+
+   std::vector<uint8_t> temp1 = startcmd1;
+   std::vector<uint8_t> temp2 = startcmd2;
+
+   temp1.insert(temp1.end(), buf1.begin(), buf1.end());
+   temp1.insert(temp1.end(), endcmd1.begin(), endcmd1.end());
+   temp2.insert(temp2.end(), buf1.begin(), buf1.end());
+   temp2.insert(temp2.end(), endcmd2.begin(), endcmd2.end());
+
+   // combine buffers into 1
+   std::vector<uint8_t> temp3;
+   temp3.reserve(temp1.size() + temp2.size());
+   temp3.insert(temp3.end(), temp1.begin(), temp1.end());
+   temp3.insert(temp3.end(), temp2.begin(), temp2.end());
+
+   retbuf = temp3;
 }
 
 

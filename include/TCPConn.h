@@ -16,7 +16,7 @@ public:
    ~TCPConn();
 
    // The current status of the connection
-   enum statustype { s_none, s_connecting, s_connected, s_datatx, s_datarx, s_waitack, s_hasdata };
+   enum statustype { s_none, s_connecting, s_connected, s_client_wait_for_challenge, s_server_wait_for_encryped_challenge_and_client_challenge, s_datatx, s_datarx, s_waitack, s_hasdata };
 
    statustype getStatus() { return _status; };
 
@@ -72,7 +72,9 @@ protected:
    // Functions to execute various stages of a connection 
    void sendSID();
    void waitForSID();
-   void transmitData();
+   void waitForChallengeFromServer();
+   void waitForEncrypedChallengeFromClientAndClientChallenge();
+   void waitForEncryptedChallengeFromServerAndTransmitData();
    void waitForData();
    void awaitAck();
 
@@ -85,10 +87,27 @@ protected:
    bool getCmdData(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd,
                                                     std::vector<uint8_t> &endcmd);
 
+   // same as getCmdData, except gets data between startcmd1 and endcmd1 and places in retbuf1, and gets data between
+   // startcmd2 and endcmd2 and places them in retbuf2
+   bool getCmdData2(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd1,
+                                               std::vector<uint8_t> &endcmd1,
+                                               std::vector<uint8_t> &startcmd2,
+                                               std::vector<uint8_t> &endcmd2,
+                                               std::vector<uint8_t> &retbuf1,
+                                               std::vector<uint8_t> &retbuf2);
+
    // Places startcmd and endcmd strings around the data in buf and returns it in buf
    void wrapCmd(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd,
                                                     std::vector<uint8_t> &endcmd);
 
+   // Same as wrapCmd, except places stardcmd1 and endcmd1 string around the data in buf1 and startcmd2 and endcmd2 around the data in buf2.
+   // Finally, buf1 and buf2 are combined and placed in retbuf
+   void wrapCmd2(std::vector<uint8_t> &buf1, std::vector<uint8_t> &buf2, 
+                                                  std::vector<uint8_t> &startcmd1,
+                                                  std::vector<uint8_t> &endcmd1,
+                                                  std::vector<uint8_t> &startcmd2,
+                                                  std::vector<uint8_t> &endcmd2,
+                                                  std::vector<uint8_t> &retbuf);
 
 private:
 

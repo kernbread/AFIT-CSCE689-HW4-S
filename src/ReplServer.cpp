@@ -355,13 +355,13 @@ void ReplServer::sendOffsets() {
   unsigned int count = 0;
 
 
-      for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
-        auto node_id_to_adjust = itr->first;
-        auto offset = itr->second;
+  for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
+    auto node_id_to_adjust = itr->first;
+    auto offset = itr->second;
 
-        serializeOffsetsMessage(marshall_data, node_id_to_adjust, offset);
-        count++;
-      }
+    serializeOffsetsMessage(marshall_data, node_id_to_adjust, offset);
+    count++;
+  }
 
    uint8_t *ctptr_begin = (uint8_t *) &count;
    marshall_data.insert(marshall_data.begin(), ctptr_begin, ctptr_begin+sizeof(unsigned int));
