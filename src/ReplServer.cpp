@@ -61,8 +61,6 @@ void ReplServer::startDaemonThreads() {
 }
 
 ReplServer::~ReplServer() {
-
-  terminated = true;
   // join all joinable daemon threads
   for (std::thread& thread : threadHandles) {
     if (thread.joinable())
@@ -137,10 +135,10 @@ void ReplServer::replicate() {
          // Incoming replication--add it to this server's local database
          mtx.lock();
 
-         if (data.size() != 20)
+         if (data.size() != 20) // TODO: need to get rid of this magic number and find another way to identify this is an offset message
             addReplDronePlots(data);  
           else {
-            if (_verbosity >= 2) std::cout << "Received new offsets from node " << sid << std::endl;
+            if (_verbosity >= 1) std::cout << "Received new offsets from node " << sid << std::endl;
             processReceivedOffsets(data);
           }
 
@@ -173,12 +171,12 @@ unsigned int ReplServer::queueNewPlots() {
       // If this is a new one, marshall it and clear the flag
       if (dpit->isFlagSet(DBFLAG_NEW)) {
          
-         dpit->serialize(marshall_data);
+         dpit->serializeWithAdjusted(marshall_data);
          dpit->clrFlags(DBFLAG_NEW);
 
          count++;
       }
-      if (marshall_data.size() % DronePlot::getDataSize() != 0)
+      if (marshall_data.size() % DronePlot::getDataSizeWithAdjusted() != 0)
          throw std::runtime_error("Issue with marshalling!");
 
    }
@@ -222,7 +220,7 @@ void ReplServer::addReplDronePlots(std::vector<uint8_t> &data) {
       throw std::runtime_error("Not enough data passed into addReplDronePlots");
    }
 
-   if ((data.size() - 4) % DronePlot::getDataSize() != 0) {
+   if ((data.size() - 4) % DronePlot::getDataSizeWithAdjusted() != 0) {
       throw std::runtime_error("Data passed into addReplDronePlots was not the right multiple of DronePlot size");
    }
 
@@ -236,9 +234,9 @@ void ReplServer::addReplDronePlots(std::vector<uint8_t> &data) {
 
    for (unsigned int i=0; i<count; i++) {
       plot.clear();
-      plot.assign(dptr, dptr + DronePlot::getDataSize());
+      plot.assign(dptr, dptr + DronePlot::getDataSizeWithAdjusted());
       addSingleDronePlot(plot);
-      dptr += DronePlot::getDataSize();      
+      dptr += DronePlot::getDataSizeWithAdjusted();      
    }
    if (_verbosity >= 2)
       std::cout << "Replicated in " << count << " plots\n";   
@@ -253,10 +251,10 @@ void ReplServer::addReplDronePlots(std::vector<uint8_t> &data) {
 void ReplServer::addSingleDronePlot(std::vector<uint8_t> &data) {
    DronePlot tmp_plot;
 
-   tmp_plot.deserialize(data);
+   tmp_plot.deserializeWithAdjusted(data);
 
-   _plotdb.addPlot(tmp_plot.drone_id, tmp_plot.node_id, tmp_plot.timestamp, tmp_plot.latitude,
-                                                         tmp_plot.longitude);
+   _plotdb.addPlotWithAdjusted(tmp_plot.drone_id, tmp_plot.node_id, tmp_plot.timestamp, tmp_plot.latitude,
+                                                         tmp_plot.longitude, tmp_plot.adjusted);
 }
 
 void ReplServer::getOffsetsFromPrimaryNode() {
@@ -286,13 +284,12 @@ void ReplServer::getOffsetsFromPrimaryNode() {
         auto latitude_2 = dp2.latitude;
         auto longitude_2 = dp2.longitude;
         auto time_2 = dp2.timestamp;
+        auto adjusted_2 = dp2.adjusted;
 
         // if they have the same lat,long, we can derive the offset from their time difference
-        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && dp2.drone_id!=4) {
+        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !adjusted_2) {
           offsets.insert({node_id_2, (long int) time_1 - (long int) time_2});
         }
-
-
         mtx.unlock();
       }
     }
@@ -306,14 +303,14 @@ void ReplServer::getOffsetsFromPrimaryNode() {
       std::cout << itr->first << '\t' << itr->second << std::endl;
   }
 
-  sendOffsets(); // send found offsets to all other nodes so they can stop their search :)
+  sendOffsets(); // send found offsets to all other nodes so they can stop their search early :)
   // from this, other nodes will update their offsets map to mirror the one discovered 
 
   readyToAdjust = true;
 }
 
 void ReplServer::adjustTimeStamps() {
-  while (!terminated) {
+  while (!_shutdown) {
     // wait until we have all the offsets before adjusting...
     if (!readyToAdjust) {
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -329,10 +326,11 @@ void ReplServer::adjustTimeStamps() {
           DronePlot dp = *dpit;
 
           auto node_id = dp.node_id;
+          auto adjusted = dp.adjusted;
 
           mtx.lock();
-          if (node_id_to_adjust == node_id && dpit->drone_id != 4) {
-            dpit->drone_id = 4;
+          if (node_id_to_adjust == node_id && !adjusted) {
+            dpit->adjusted = true;
             dpit->timestamp = dpit->timestamp + offset; // adjust timestamp
           }
           mtx.unlock();
@@ -343,7 +341,7 @@ void ReplServer::adjustTimeStamps() {
 }
 
 void ReplServer::deduplicate() {
-  while (!terminated) {
+  while (!_shutdown) {
     std::list<DronePlot>::iterator dpit;
     for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
       DronePlot dp = *dpit;
@@ -362,13 +360,14 @@ void ReplServer::deduplicate() {
         auto longitude_2 = dp2.longitude;
         auto time_2 = dp2.timestamp;
 
-        //if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2)
-          //dpit2 = _plotdb.erase(dpit2);
+        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2) {
+          mtx.lock();
+          dpit2 = _plotdb.erase(dpit2); // erase any of them; we are only keeping the first one we see
+          mtx.unlock();
+        }
       }
     }
-
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 
 }

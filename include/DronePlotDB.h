@@ -6,7 +6,6 @@
 #include <unistd.h>
 #include <pthread.h>
 #include "exceptions.h"
-#include <mutex>
 
 // Flags for the DronePlot object. The first two are already coded in and
 // you can define more. It's based off bitwise and/or operations so just
@@ -24,17 +23,23 @@ class DronePlot
 public:
    DronePlot();
    DronePlot(int in_droneid, int in_nodeid, int in_timestamp, float in_latitude, float in_longitude);
+   DronePlot(int in_droneid, int in_nodeid, int in_timestamp, float in_latitude, float in_longitude, bool in_adjusted);
+
    virtual ~DronePlot();
 
    // Function to serialize, or convert this data into a binary stream in a vector class and back
    void serialize(std::vector<uint8_t> &buf);
+   void serializeWithAdjusted(std::vector<uint8_t> &buf);
+
    void deserialize(std::vector<uint8_t> &buf, unsigned int start_pt = 0);
+   void deserializeWithAdjusted(std::vector<uint8_t> &buf, unsigned int start_pt = 0);
 
    // Reads and writes this plot to/from a buffer in comma-separated format
    int readCSV(std::string &buf);
    void writeCSV(std::string &buf);
 
    static size_t getDataSize();   // Num of bytes required to store the data (for serialization)
+   static size_t getDataSizeWithAdjusted();
   
    // Flag manipulation -- pass in a define above as in setFlags(DBFLAG_NEW); 
    void setFlags(unsigned short flags);
@@ -47,6 +52,7 @@ public:
    time_t timestamp;
    float latitude;
    float longitude;
+   bool adjusted = false;
 
 private:
    unsigned short _flags;
@@ -67,6 +73,7 @@ public:
 
    // Add a plot to the database with the given attributes (mutex'd)
    void addPlot(int drone_id, int node_id, time_t timestamp, float lattitude, float longitude);
+   void addPlotWithAdjusted(int drone_id, int node_id, time_t timestamp, float lattitude, float longitude, bool adjusted);
 
    // Load or write the database to/from a CSV file, 
    int loadCSVFile(const char *filename);
@@ -99,7 +106,6 @@ public:
    // Wipe the database
    void clear();
 
-   std::mutex mtx;
 private:
    std::list<DronePlot> _dbdata;
 

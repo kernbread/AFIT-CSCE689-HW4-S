@@ -216,6 +216,7 @@ void QueueMgr::sendToAll(std::vector<uint8_t> &data) {
 
 }
 
+
 /*********************************************************************************************
  * sendToServer - places data into the queue to be sent to the server indicated by
  *                server_id. Transmission will happen on its own

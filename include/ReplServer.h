@@ -89,8 +89,7 @@ private:
    // primary node to get time from
    int primary_node_id = 1;
 
-   bool terminated = false;
-
+   // mutex to prevent reading/updating a data plot to the DB at the same time
    std::mutex mtx;
 
    // functions used to send offsets to other nodes

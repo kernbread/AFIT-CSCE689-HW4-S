@@ -46,6 +46,19 @@ DronePlot::DronePlot(int in_droneid, int in_nodeid, int in_timestamp, float in_l
 
 }
 
+DronePlot::DronePlot(int in_droneid, int in_nodeid, int in_timestamp, float in_latitude, float in_longitude, bool in_adjusted):
+               drone_id(in_droneid),
+               node_id(in_nodeid),
+               timestamp(in_timestamp),
+               latitude(in_latitude),
+               longitude(in_longitude),
+               adjusted(in_adjusted),
+               _flags(0)
+{
+
+}
+
+
 DronePlot::~DronePlot() {
 
 }
@@ -59,6 +72,11 @@ size_t DronePlot::getDataSize() {
 
    return sizeof(drone_id) + sizeof(node_id) + sizeof(timestamp) + sizeof(latitude) +
                      sizeof(longitude);
+}
+
+size_t DronePlot::getDataSizeWithAdjusted() {
+   return sizeof(drone_id) + sizeof(node_id) + sizeof(timestamp) + sizeof(latitude) +
+                     sizeof(longitude) + sizeof(adjusted);
 }
 
 /*****************************************************************************************
@@ -83,6 +101,27 @@ void DronePlot::serialize(std::vector<uint8_t> &buf) {
       throw std::runtime_error("Die");
    // Loop through all our data variables and their sizes, and push to vector byte by byte
    for (unsigned int i=0; i<5; i++) { 
+      for (unsigned int j=0; j < sizes[i]; j++, dataptrs[i]++)
+      {  
+         buf.push_back(*dataptrs[i]);
+      }
+   }
+}
+
+void DronePlot::serializeWithAdjusted(std::vector<uint8_t> &buf) {
+   uint8_t *dataptrs[6] = { (uint8_t *) &drone_id,
+                            (uint8_t *) &node_id,
+                            (uint8_t *) &timestamp,
+                            (uint8_t *) &latitude,
+                            (uint8_t *) &longitude,
+                            (uint8_t *) &adjusted };
+   uint8_t sizes[6] = {sizeof(drone_id), sizeof(node_id), sizeof(timestamp), 
+                       sizeof(latitude), sizeof(longitude), sizeof(adjusted) };
+
+   if (drone_id == 0)
+      throw std::runtime_error("Die");
+   // Loop through all our data variables and their sizes, and push to vector byte by byte
+   for (unsigned int i=0; i<6; i++) { 
       for (unsigned int j=0; j < sizes[i]; j++, dataptrs[i]++)
       {  
          buf.push_back(*dataptrs[i]);
@@ -121,6 +160,27 @@ void DronePlot::deserialize(std::vector<uint8_t> &buf, unsigned int start_pt) {
       }
    }
 
+}
+
+void DronePlot::deserializeWithAdjusted(std::vector<uint8_t> &buf, unsigned int start_pt) {
+   uint8_t *dataptrs[6] = { (uint8_t *) &drone_id,
+                            (uint8_t *) &node_id,
+                            (uint8_t *) &timestamp,
+                            (uint8_t *) &latitude,
+                            (uint8_t *) &longitude,
+                            (uint8_t *) &adjusted };
+   uint8_t sizes[6] = {sizeof(drone_id), sizeof(node_id), sizeof(timestamp),
+                       sizeof(latitude), sizeof(longitude), sizeof(adjusted) };
+
+   // Loop through all our data variables and their sizes, and read in the data
+   unsigned int vpos = start_pt;
+   for (unsigned int i=0; i<6; i++) {
+      for (unsigned int j=0; j < sizes[i]; j++, dataptrs[i]++){
+         if (vpos > buf.size())
+            throw std::runtime_error("DronePlot deserialize ran out of data in vector buffer prematurely");
+         *dataptrs[i] = buf[vpos++];
+      }
+   }
 }
 
 /*****************************************************************************************
@@ -237,6 +297,16 @@ void DronePlotDB::addPlot(int drone_id, int node_id, time_t timestamp, float lat
    pthread_mutex_lock(&_mutex);
 
    _dbdata.emplace_back(drone_id, node_id, timestamp, latitude, longitude);
+
+   // Unlock the mutex before we exit
+   pthread_mutex_unlock(&_mutex);
+}
+
+void DronePlotDB::addPlotWithAdjusted(int drone_id, int node_id, time_t timestamp, float latitude, float longitude, bool adjusted) {
+   // First lock the mutex (blocking)
+   pthread_mutex_lock(&_mutex);
+
+   _dbdata.emplace_back(drone_id, node_id, timestamp, latitude, longitude, adjusted);
 
    // Unlock the mutex before we exit
    pthread_mutex_unlock(&_mutex);
