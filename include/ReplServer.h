@@ -41,18 +41,11 @@ private:
    void addReplDronePlots(std::vector<uint8_t> &data);
    void addSingleDronePlot(std::vector<uint8_t> &data);
 
-   void startDaemonThreads();
-
-   // daemon thread that periodically attempts to find the offset between the primary node and the other nodes
-   // joins when all offsets between every other node and the primary are found
    void getOffsetsFromPrimaryNode();
    bool readyToAdjust = false; // set to true once we have all the offsets
 
-   // daemon thread that periodically attempts to remove duplicate records from the local database.
-   // a duplicate record has the same time, lat, long
    void deduplicate();
 
-   // daemon thread that periodically attempts to adjust local timestamps to conform with the primary_node_id's timestamps
    void adjustTimeStamps(); 
 
    unsigned int queueNewPlots();

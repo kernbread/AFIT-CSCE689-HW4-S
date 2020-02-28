@@ -25,7 +25,6 @@ ReplServer::ReplServer(DronePlotDB &plotdb, float time_mult)
                                _port(9999)
 {
    _start_time = time(NULL);
-   startDaemonThreads();
 }
 
 ReplServer::ReplServer(DronePlotDB &plotdb, const char *ip_addr, unsigned short port, int offset, 
@@ -40,25 +39,8 @@ ReplServer::ReplServer(DronePlotDB &plotdb, const char *ip_addr, unsigned short 
 
 {
    _start_time = time(NULL) + offset;
-   startDaemonThreads();
 }
 
-void ReplServer::startDaemonThreads() {
-  // offset detector thread
-  std::thread offsetDetectorThread(&ReplServer::getOffsetsFromPrimaryNode, this);
-  offsetDetectorThread.detach(); // make thread a daemon
-  threadHandles.push_back(std::move(offsetDetectorThread));
-
-  // time stamp adjustor thread
-  std::thread adjustTimeStampsThread(&ReplServer::adjustTimeStamps, this);
-  adjustTimeStampsThread.detach(); // make thread a daemon
-  threadHandles.push_back(std::move(adjustTimeStampsThread));
-
-  // deduplication thread
-  std::thread dedupThread(&ReplServer::deduplicate, this);
-  dedupThread.detach(); // make thread a daemon
-  threadHandles.push_back(std::move(dedupThread));
-}
 
 ReplServer::~ReplServer() {
   // join all joinable daemon threads
@@ -112,6 +94,8 @@ void ReplServer::replicate() {
    // Replicate until we get the shutdown signal
    while (!_shutdown) {
 
+      getOffsetsFromPrimaryNode(); // try to get offsets from primary node -> all other nodes
+
       // Check for new connections, process existing connections, and populate the queue as applicable
       _queue.handleQueue();     
 
@@ -119,9 +103,8 @@ void ReplServer::replicate() {
       // that have not been replicated yet and adding them to the queue for replication
       if (getAdjustedTime() - _last_repl > secs_between_repl) {
 
-         mtx.lock();
          queueNewPlots();
-         mtx.unlock();
+
          _last_repl = getAdjustedTime();
       }
       
@@ -133,17 +116,16 @@ void ReplServer::replicate() {
       while (_queue.pop(sid, data)) {
 
          // Incoming replication--add it to this server's local database
-         mtx.lock();
-
          if (data.size() != 20) // TODO: need to get rid of this magic number and find another way to identify this is an offset message
             addReplDronePlots(data);  
           else {
             if (_verbosity >= 1) std::cout << "Received new offsets from node " << sid << std::endl;
             processReceivedOffsets(data);
           }
-
-         mtx.unlock();       
       }       
+
+      adjustTimeStamps(); // try to adjust timestamps to conform to primary node time
+      deduplicate(); // try to remove duplicate records
 
       usleep(1000);
    }   
@@ -258,9 +240,12 @@ void ReplServer::addSingleDronePlot(std::vector<uint8_t> &data) {
 }
 
 void ReplServer::getOffsetsFromPrimaryNode() {
-  auto numberOfNodes = _queue.getNumServers() - 1; // subtracting 1 b/c we don't want to count the primary node as we know it's offset is 0 from itself
+  if (readyToAdjust)
+    return;
 
-  while (offsets.size() < numberOfNodes) {
+  auto numberOfNodes = _queue.getNumServers();
+
+  if (offsets.size() < numberOfNodes) {
     // check for records with the same lat, long
     std::list<DronePlot>::iterator dpit;
     for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) { 
@@ -279,7 +264,6 @@ void ReplServer::getOffsetsFromPrimaryNode() {
 
         if (dpit2 == dpit) continue; // skip, we don't want to check an element against itself
 
-        mtx.lock();
         auto node_id_2 = dp2.node_id;
         auto latitude_2 = dp2.latitude;
         auto longitude_2 = dp2.longitude;
@@ -290,85 +274,74 @@ void ReplServer::getOffsetsFromPrimaryNode() {
         if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !adjusted_2) {
           offsets.insert({node_id_2, (long int) time_1 - (long int) time_2});
         }
-        mtx.unlock();
       }
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  } else {
+    if (_verbosity >= 1) {
+      std::cout << "Found all offsets!" << std::endl;
+      for (auto itr = offsets.begin(); itr != offsets.end(); ++itr)
+        std::cout << itr->first << '\t' << itr->second << std::endl;
+    }
 
-  }
+    sendOffsets(); // send found offsets to all other nodes so they can stop their search early :)
+    // from this, other nodes will update their offsets map to mirror the one discovered 
 
-  if (_verbosity >= 1) {
-    std::cout << "Found all offsets!" << std::endl;
-    for (auto itr = offsets.begin(); itr != offsets.end(); ++itr)
-      std::cout << itr->first << '\t' << itr->second << std::endl;
-  }
-
-  sendOffsets(); // send found offsets to all other nodes so they can stop their search early :)
-  // from this, other nodes will update their offsets map to mirror the one discovered 
-
-  readyToAdjust = true;
+    readyToAdjust = true;
+    }
 }
 
 void ReplServer::adjustTimeStamps() {
-  while (!_shutdown) {
-    // wait until we have all the offsets before adjusting...
-    if (!readyToAdjust) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
-      continue;
+  if (!readyToAdjust)
+    return;
+
+  for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
+    auto node_id_to_adjust = itr->first;
+    auto offset = itr->second;
+
+    std::list<DronePlot>::iterator dpit;
+    for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
+        DronePlot dp = *dpit;
+
+        auto node_id = dp.node_id;
+        auto adjusted = dp.adjusted;
+
+        if (node_id_to_adjust == node_id && !adjusted) {
+          dpit->adjusted = true;
+          dpit->timestamp = dpit->timestamp + offset; // adjust timestamp
+        }
     }
-
-    for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
-      auto node_id_to_adjust = itr->first;
-      auto offset = itr->second;
-
-      std::list<DronePlot>::iterator dpit;
-      for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
-          DronePlot dp = *dpit;
-
-          auto node_id = dp.node_id;
-          auto adjusted = dp.adjusted;
-
-          mtx.lock();
-          if (node_id_to_adjust == node_id && !adjusted) {
-            dpit->adjusted = true;
-            dpit->timestamp = dpit->timestamp + offset; // adjust timestamp
-          }
-          mtx.unlock();
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
+  
 }
 
 void ReplServer::deduplicate() {
-  while (!_shutdown) {
-    std::list<DronePlot>::iterator dpit;
-    for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
-      DronePlot dp = *dpit;
+  if (!readyToAdjust)
+    return;
 
-      auto latitude_1 = dp.latitude;
-      auto longitude_1 = dp.longitude;
-      auto time_1 = dp.timestamp;
+  std::list<DronePlot>::iterator dpit;
+  for (dpit = _plotdb.begin(); dpit != _plotdb.end(); dpit++) {
+    DronePlot dp = *dpit;
 
-      std::list<DronePlot>::iterator dpit2;
-      for (dpit2 = _plotdb.begin(); dpit2 != _plotdb.end(); dpit2++) {
-        DronePlot dp2 = *dpit2;
+    auto latitude_1 = dp.latitude;
+    auto longitude_1 = dp.longitude;
+    auto time_1 = dp.timestamp;
 
-        if (dpit2 == dpit) continue; // skip, we don't want to check an element against itself
+    std::list<DronePlot>::iterator dpit2;
+    for (dpit2 = _plotdb.begin(); dpit2 != _plotdb.end(); dpit2++) {
+      DronePlot dp2 = *dpit2;
 
-        auto latitude_2 = dp2.latitude;
-        auto longitude_2 = dp2.longitude;
-        auto time_2 = dp2.timestamp;
+      if (dpit2 == dpit) continue; // skip, we don't want to check an element against itself
 
-        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2) {
-          mtx.lock();
-          dpit2 = _plotdb.erase(dpit2); // erase any of them; we are only keeping the first one we see
-          mtx.unlock();
-        }
+      auto latitude_2 = dp2.latitude;
+      auto longitude_2 = dp2.longitude;
+      auto time_2 = dp2.timestamp;
+
+      if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2) {
+        dpit2 = _plotdb.erase(dpit2); // erase any of them; we are only keeping the first one we see
       }
     }
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
+  
 
 }
 
