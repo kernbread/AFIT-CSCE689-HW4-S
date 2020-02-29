@@ -346,7 +346,7 @@ void TCPConn::cliWaitForSvrChal() {
    }
 }
 
-// Server: Wait for encrypted challenge & client challenge from client. Verify client encrpyted challenge. Respond to client challenge.
+// Server: Wait for encrypted challenge & client challenge from client. Verify client encrpyted challenge. Respond to client challenge and send SID.
 void TCPConn::svrWaitForCliEncryptedChalAndCliChal() {
    if (_connfd.hasData()) {
       std::vector<uint8_t> buf;

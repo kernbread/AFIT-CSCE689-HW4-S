@@ -239,6 +239,11 @@ void ReplServer::addSingleDronePlot(std::vector<uint8_t> &data) {
                                                          tmp_plot.longitude, tmp_plot.adjusted);
 }
 
+/**************************************************************************************************************************
+ * getOffsetsFromPrimaryNode - attempts to get time offsets between the primary node and all other nodes in the network.
+
+   This method will look for offsets until an offset has been found between the primary and all other nodes in the network.
+ **************************************************************************************************************************/
 void ReplServer::getOffsetsFromPrimaryNode() {
   if (readyToAdjust)
     return;
@@ -272,7 +277,7 @@ void ReplServer::getOffsetsFromPrimaryNode() {
         auto adjusted_2 = dp2.adjusted;
         auto drone_id_2 = dp2.drone_id;
 
-        // if they have the same lat,long, we can derive the offset from their time difference
+        // if they have the same lat,long,droneid we can derive the offset from their time difference
         if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !adjusted_2 && drone_id_1 == drone_id_2) {
           offsets.insert({node_id_2, (long int) time_1 - (long int) time_2});
         }
@@ -292,10 +297,15 @@ void ReplServer::getOffsetsFromPrimaryNode() {
     }
 }
 
+/**********************************************************************************************************
+ adjustTimeStamps - Once offsets are found, they can be used to adjust timestamps of records in the DB.
+ This method uses found offsets to adjust records timestamps to conform with the primary node's time.
+ **********************************************************************************************************/
 void ReplServer::adjustTimeStamps() {
   if (!readyToAdjust)
     return;
 
+  // look through all records and try to find records with a node id we have an offset for. If the records hasn't yet been adjusted, adjust
   for (auto itr = offsets.begin(); itr != offsets.end(); ++itr) {
     auto node_id_to_adjust = itr->first;
     auto offset = itr->second;
@@ -316,6 +326,11 @@ void ReplServer::adjustTimeStamps() {
   
 }
 
+/********************************************************************************************
+  deduplicate - iterates through all records in the local DB and removes duplicate records. 
+  A duplicate record is defined here as 2 records having the same lat, long, drone id, and 
+  time stamps. This method removes all such duplicates, and maintains a single copy.
+********************************************************************************************/
 void ReplServer::deduplicate() {
   if (!readyToAdjust)
     return;
@@ -340,6 +355,7 @@ void ReplServer::deduplicate() {
       auto time_2 = dp2.timestamp;
       auto drone_id_2 = dp2.drone_id;
 
+      // criteria of a duplicate as described above...
       if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2 && drone_id_1 == drone_id_2) {
         dpit2 = _plotdb.erase(dpit2); // erase any of them; we are only keeping the first one we see
       }
@@ -352,6 +368,10 @@ void ReplServer::shutdown() {
 }
 
 
+/*
+  The below methods are very similar to those used above for sending replication actions. However, these methods allow the server to 
+  send offset information to all other servers in the network. 
+*/
 void ReplServer::sendOffsets() {
   std::vector<uint8_t> marshall_data;
   unsigned int count = 0;
@@ -412,7 +432,7 @@ void ReplServer::processReceivedOffsets(std::vector<uint8_t> &buf) {
    }
  }
 
-void ReplServer::processSingleOffset(std::vector<uint8_t> &buf, int node_to_adjust, int offset) {
+ void ReplServer::processSingleOffset(std::vector<uint8_t> &buf, int node_to_adjust, int offset) {
    uint8_t *dataptrs[2] = { (uint8_t *) &node_to_adjust,
                               (uint8_t *) &offset };
 
