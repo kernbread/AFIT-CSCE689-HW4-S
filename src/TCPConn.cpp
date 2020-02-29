@@ -203,7 +203,7 @@ void TCPConn::handleConnection() {
             cliSendSid();
             break;
 
-         // Server: Wait for the SID from a newly-connected client, then send our SID and a challenge
+         // Server: Wait for the SID from a newly-connected client, then send a challenge
          case svr_wait_for_cli_sid:
             svrWaitForCliSid();
             break;

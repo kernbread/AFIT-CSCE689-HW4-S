@@ -255,6 +255,7 @@ void ReplServer::getOffsetsFromPrimaryNode() {
       auto latitude_1 = dp.latitude;
       auto longitude_1 = dp.longitude;
       auto time_1 = dp.timestamp;
+      auto drone_id_1 = dp.drone_id;
 
       if (node_id_1 != primary_node_id) continue; // wait until we find an element with the primary node id
 
@@ -269,9 +270,10 @@ void ReplServer::getOffsetsFromPrimaryNode() {
         auto longitude_2 = dp2.longitude;
         auto time_2 = dp2.timestamp;
         auto adjusted_2 = dp2.adjusted;
+        auto drone_id_2 = dp2.drone_id;
 
         // if they have the same lat,long, we can derive the offset from their time difference
-        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !adjusted_2) {
+        if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && node_id_2 != primary_node_id && !adjusted_2 && drone_id_1 == drone_id_2) {
           offsets.insert({node_id_2, (long int) time_1 - (long int) time_2});
         }
       }
@@ -325,6 +327,7 @@ void ReplServer::deduplicate() {
     auto latitude_1 = dp.latitude;
     auto longitude_1 = dp.longitude;
     auto time_1 = dp.timestamp;
+    auto drone_id_1 = dp.drone_id;
 
     std::list<DronePlot>::iterator dpit2;
     for (dpit2 = _plotdb.begin(); dpit2 != _plotdb.end(); dpit2++) {
@@ -335,14 +338,13 @@ void ReplServer::deduplicate() {
       auto latitude_2 = dp2.latitude;
       auto longitude_2 = dp2.longitude;
       auto time_2 = dp2.timestamp;
+      auto drone_id_2 = dp2.drone_id;
 
-      if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2) {
+      if (latitude_1 == latitude_2 && longitude_1 == longitude_2 && time_1 == time_2 && drone_id_1 == drone_id_2) {
         dpit2 = _plotdb.erase(dpit2); // erase any of them; we are only keeping the first one we see
       }
     }
   }
-  
-
 }
 
 void ReplServer::shutdown() {
