@@ -16,7 +16,7 @@ public:
    ~TCPConn();
 
    // The current status of the connection
-   enum statustype { s_none, s_connecting, s_connected, s_client_wait_for_challenge, s_server_wait_for_encryped_challenge_and_client_challenge, s_datatx, s_datarx, s_waitack, s_hasdata };
+   enum statustype { s_none, cli_send_sid, svr_wait_for_cli_sid, cli_wait_for_svr_chal, svr_wait_for_cli_encrypted_chal_and_cli_chal, cli_wait_for_svr_encrypted_chal_and_sid_and_transmit_data, s_datarx, s_waitack, s_hasdata };
 
    statustype getStatus() { return _status; };
 
@@ -56,6 +56,10 @@ public:
    void setNodeID(const char *new_id) { _node_id = new_id; };
    void setSvrID(const char *new_id) { _svr_id = new_id; };
 
+   // getter/setter for internal challenge
+   void setInternalChallenge(std::string chal) { internal_challenge = chal; };
+   std::string getInternalChallenge() { return internal_challenge; };
+
    // Closes the socket
    void disconnect();
 
@@ -70,11 +74,11 @@ public:
 
 protected:
    // Functions to execute various stages of a connection 
-   void sendSID();
-   void waitForSID();
-   void waitForChallengeFromServer();
-   void waitForEncrypedChallengeFromClientAndClientChallenge();
-   void waitForEncryptedChallengeFromServerAndTransmitData();
+   void cliSendSid();
+   void svrWaitForCliSid();
+   void cliWaitForSvrChal();
+   void svrWaitForCliEncryptedChalAndCliChal();
+   void cliWaitForSvrEncryptedChalAndSidAndTransmitData();
    void waitForData();
    void awaitAck();
 
@@ -113,7 +117,7 @@ private:
 
    bool _connected = false;
 
-   std::vector<uint8_t> c_rep, c_endrep, c_auth, c_endauth, c_ack, c_sid, c_endsid;
+   std::vector<uint8_t> c_rep, c_endrep, c_auth, c_endauth, c_ack, c_sid, c_endsid, c_chal, c_endchal, c_crypt_chal, c_crypt_endchal;
 
    statustype _status = s_none;
 
@@ -135,6 +139,8 @@ private:
    unsigned int _verbosity;
 
    LogMgr &_server_log;
+
+   std::string internal_challenge; // used to remember what challenge this connection sent
 };
 
 

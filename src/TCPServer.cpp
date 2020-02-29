@@ -169,7 +169,7 @@ void TCPServer::handleConnections() {
       // If the client is not connected, then either reconnect or drop 
       if ((!(*tptr)->isConnected()) || ((*tptr)->getStatus() == TCPConn::s_none)) {
          // Might be trying to connect
-         if ((*tptr)->getStatus() == TCPConn::s_connecting) {
+         if ((*tptr)->getStatus() == TCPConn::cli_send_sid) {
 
             // If our retry timer hasn't expired....skip
             if ((*tptr)->reconnect > time(NULL)) {
